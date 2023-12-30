@@ -11,7 +11,7 @@ import time
 from pytoniq.liteclient.balancer import LiteBalancer
 from pytoniq_core.boc import Cell
 from pytoniq_core.crypto.keys import private_key_to_public_key, mnemonic_to_private_key
-provider = LiteBalancer.from_testnet_config(trust_level=1)
+provider = LiteBalancer.from_mainnet_config(trust_level=1)
 mnemonics='MY_MNEMO'
 
 await provider.start_up()
