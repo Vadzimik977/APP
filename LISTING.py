@@ -99,7 +99,7 @@ async def deploy():
     print(contract.account)
 
     # ВЫЗОВ КОНТРАКТА
-    msg = await wallet.create_wallet_internal_message(
+    msg = wallet.create_wallet_internal_message(
         destination=address,
         value=int(amount_1),
         body=begin_cell()
