@@ -1,31 +1,10 @@
-from pytoniq.contract.wallets import WalletV3R2,Wallet,BaseWallet,WalletV3,WalletV3R1,WalletV4R2
-from pytoniq import Address
-from pytoniq import LiteClient
-import base64
-import json
-from pytoniq_core import begin_cell,StateInit
-from base64 import urlsafe_b64encode
-import requests
 import asyncio
-import time
-from pytoniq.liteclient.balancer import LiteBalancer
-from pytoniq_core.boc import Cell
-from pytoniq_core.crypto.keys import private_key_to_public_key, mnemonic_to_private_key
-provider = LiteBalancer.from_mainnet_config(trust_level=1)
-mnemonics='MY_MNEMO'
+import json
+import requests
+from pytoniq_core import Cell, StateInit, Builder, begin_cell, Address
+from pytoniq import LiteClient, Contract, WalletV4R2
 
-await provider.start_up()
-
-
-wallet=await  WalletV4R2.from_mnemonic(provider=provider,mnemonics=mnemonics)
-print(wallet.wallet_id)
-s=await wallet.get_account_state()
-print(s)
-j=await wallet.get_balance()
-print(j)
-
-
-
+# ДЛЯ ОТПРАВКИ ТРАНСФЕРА
 def form(data: dict):
     return begin_cell()\
             .store_uint(0, 32)\
@@ -33,95 +12,109 @@ def form(data: dict):
                 + json.dumps(data, separators=(',', ':')))\
            .end_cell()
 def transfer(amount: int, ticker: str, recipient: str):
-    return ({
+    return form({
         "p": "ton-20",
         "op": "transfer",
         "tick": ticker,
         "to": recipient,
-        "amt": amount,
-        "memo":""
+        "amt": str(int(amount * 1e9))
     })
 
+# ЗАПРОС С DTON и ФОРМИРОВАНИЕ state_init
+tick='dedust.io'
+list_amount=1
+unit_price=1
+mnemo='MY_MNEMO'
+endpoint = 'https://dton.io/graphql/'
+query = f'''
+  query {{
+    ton20listing(
+      tick: "{tick}"
+      initiator: "UQCk-Q27rbvLfSiY52SQepu7XPt4dt7wBHu9ZB3dkJKfB0qW"
+      amt: "{list_amount}"
+      ton_price: "{unit_price}"
+    ) {{
+      address
+      stateInit
+      payload
+      amount
+      __typename
+    }}
+  }}
+'''
+
+response = requests.post(endpoint, json={'query': query})
+data = response.json()
+state1=data["data"]["ton20listing"][0]["stateInit"]
+
+if response.status_code == 200:
+    data = response.json()
+    address_1=data["data"]["ton20listing"][0]["address"]
+    s3 = Address(address_1).to_str(True, True, False)
+    print(address_1)
+    amount_1 = data["data"]["ton20listing"][0]["amount"]
+    print(amount_1)
+    payload_1 = data["data"]["ton20listing"][0]["payload"]
+    # print(payload_1)
+    state1=data["data"]["ton20listing"][0]["stateInit"]
+    # print(state1)
+    adrress_2 = data["data"]["ton20listing"][1]["address"]
+    s4=Address(adrress_2).to_str(True, True, False)
+    print(adrress_2)
+    amount_2 = data["data"]["ton20listing"][1]["amount"]
+    print(amount_2)
+    payload_2 = data["data"]["ton20listing"][1]["payload"]
+    # print(payload_2)
+    state2=data["data"]["ton20listing"][1]["stateInit"]
 
 
-try:
-    w = await WalletV4R2.from_mnemonic(provider=provider, mnemonics=mnemonics)
-    # Получение строкового представления адреса кошелька w
-    ss = w.address.to_str()
-        # Преобразование адреса в строку с использованием класса Address
-    s2 = Address(ss).to_str(True, True, False)
-        # Получение баланса кошелька w
-    bal = await w.get_balance()
-    print(bal)
-        # # Вывод информации о текущем кошельке, его адресе и балансе
-    print(s2, ss, "%.2f" % (bal / 1000000000))
-    tick='nano'
-    list_amount='1'
-    unit_price='1'
-    # Иницилиазация смарт-контракта
-    endpoint = 'https://dton.io/graphql/'
-    query = f'''
-      query {{
-        ton20listing(
-          tick: "{tick}"
-          initiator: "UQCk-Q27rbvLfSiY52SQepu7XPt4dt7wBHu9ZB3dkJKfB0qW"
-          amt: "{list_amount}"
-          ton_price: "{unit_price}"
-        ) {{
-          address
-          stateInit
-          payload
-          amount
-          __typename
-        }}
-      }}
-    '''
+# ПРЕОБРАЗОВАНИЕ STATE_INIT В ТРЕБУЕМЫЙ ФОРМАТ
 
-    response = requests.post(endpoint, json={'query': query})
-    if response.status_code == 200:
-        data = response.json()
-        address_1=data["data"]["ton20listing"][0]["address"]
-        s3 = Address(address_1).to_str(True, True, False)
-        amount_1 = data["data"]["ton20listing"][0]["amount"]
-        payload_1 = data["data"]["ton20listing"][0]["payload"]
-        state1=data["data"]["ton20listing"][0]["stateInit"]
-        # print(state1)
-        adrress_2 = data["data"]["ton20listing"][1]["address"]
-        s4=Address(adrress_2).to_str(True, True, False)
-        amount_2 = data["data"]["ton20listing"][1]["amount"]
-        payload_2 = data["data"]["ton20listing"][1]["payload"]
-        state2=data["data"]["ton20listing"][1]["stateInit"]
+code_boc = f'{state1}'
+COUNTER_CODE = Cell.one_from_boc(code_boc)
+data = begin_cell().store_uint(1, 32).store_uint(0, 32).end_cell()
+state_init = StateInit(code=COUNTER_CODE, data=data)
 
-        body = transfer(amount_2,tick,adrress_2)
+address = Address((0, state_init.serialize().hash))
 
-        code_boc = f'{state1}'
-        COUNTER_CODE = Cell.one_from_boc(code_boc)
+print(address.to_str(is_bounceable=True))
 
-        data = begin_cell().store_uint(1, 32).store_uint(0, 32).end_cell()
+# ДЕПЛОЙ КОНТРАКТА И СОЗДАНИЕ ТРАНСФЕРА TON-20 токена
+async def deploy():
+    client = LiteClient.from_mainnet_config(7, trust_level=1)
+    await client.connect()
+    wallet = await WalletV4R2.from_mnemonic(client, mnemo, 0)
+    print(wallet)
+    # ТРАНСФЕР
+    body=transfer(list_amount,tick,address_1)
+    msg1=wallet.create_wallet_internal_message(destination=address,state_init=state2,value=int(amount_2),body=body)
+    #ДЕПЛОЙ
+    contract = await Contract.from_state_init(client, 0, state_init)
+    print(contract.state_init)
+    print(contract.address)
+    print(contract.is_active)
+    print(contract.account)
 
-        state_init = StateInit(code=COUNTER_CODE, data=data)
-
-        body2=deploy_transaction(address_1,amount_1,payload_1,state1)
-
-        msg=wallet.create_wallet_internal_message(destination=Address(s2),state_init=state_init,value=int(amount_1),body=begin_cell().store_uint(0x7038d7ea, 32).store_uint(0, 64).store_uint(10, 32).end_cell())
-        msg1=wallet.create_wallet_internal_message(destination=Address(s2),state_init=state2,value=int(amount_2),body=body)
-        result = await wallet.raw_transfer(msgs=[msg,msg1])
+    # ВЫЗОВ КОНТРАКТА
+    msg = await wallet.transfer(
+        destination=address,
+        amount=int(amount_1),
+        body=begin_cell()
+            .store_uint(0x7038d7ea, 32)
+            .store_uint(0, 64)
+            .store_uint(10, 32)
+            .end_cell(),
+        state_init=state_init
+    )
+    # ОТПРАВКА ТРАНСФЕРА И ВЫЗОВ КОНТРАКТА
+    result = await wallet.raw_transfer(msgs=[msg,msg1])
+    print(result)
+    print(contract)
 
 
 
-        print('Success')
-   # за в выполнении на 3 секунды, вероятно, для ожидания завершения транзакции
-   #   await asyncio.sleep(3)
-    await provider.close_all()
+    await client.close()
 
-except Exception as e:
-    # Обработка исключений с выводом ошибки и ожидание 3 секунд
-    print(e)
-    await asyncio.sleep(3)
-    # Закрытие клиента provider
-    await provider.close()
-await provider.close_all()
-
-
-
-
+    print(contract)
+if __name__ == '__main__':
+    await deploy()
