@@ -4,6 +4,8 @@ import requests
 from pytoniq_core import Cell, StateInit, Builder, begin_cell, Address
 from pytoniq import LiteClient, Contract, WalletV4R2
 
+mnemo='my_mnemo'
+
 # ДЛЯ ОТПРАВКИ ТРАНСФЕРА
 def form(data: dict):
     return begin_cell()\
@@ -24,7 +26,7 @@ def transfer(amount: int, ticker: str, recipient: str):
 tick='dedust.io'
 list_amount=1
 unit_price=1
-mnemo='MY_MNEMO'
+
 endpoint = 'https://dton.io/graphql/'
 query = f'''
   query {{
@@ -88,7 +90,8 @@ async def deploy():
     # ТРАНСФЕР
     body=transfer(list_amount,tick,address_1)
     msg1=wallet.create_wallet_internal_message(destination=address,state_init=state2,value=int(amount_2),body=body)
-    #ДЕПЛОЙ
+
+    # ДЕПЛОЙ КОНТРАКТА
     contract = await Contract.from_state_init(client, 0, state_init)
     print(contract.state_init)
     print(contract.address)
@@ -96,9 +99,9 @@ async def deploy():
     print(contract.account)
 
     # ВЫЗОВ КОНТРАКТА
-    msg = await wallet.transfer(
+    msg = await wallet.create_wallet_internal_message(
         destination=address,
-        amount=int(amount_1),
+        value=int(amount_1),
         body=begin_cell()
             .store_uint(0x7038d7ea, 32)
             .store_uint(0, 64)
@@ -106,7 +109,6 @@ async def deploy():
             .end_cell(),
         state_init=state_init
     )
-    # ОТПРАВКА ТРАНСФЕРА И ВЫЗОВ КОНТРАКТА
     result = await wallet.raw_transfer(msgs=[msg,msg1])
     print(result)
     print(contract)
